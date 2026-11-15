@@ -60,6 +60,8 @@ jobs:
       PYTHON: ${{ matrix.python }}
       SP_KIT_SHA256: ${{ inputs.kit_sha256 }}
       SP_RELEASE_TAG: ${{ inputs.release_tag }}
+      # The repository the tool downloads the kit from: this one, so a fork's test build installs its own kit.
+      SP_KIT_REPO: ${{ github.repository }}
     steps:
       # Line endings as committed (ci.yml says why).
       - name: Keep line endings
