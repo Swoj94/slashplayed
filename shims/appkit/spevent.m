@@ -96,6 +96,7 @@ static void sp_clipboard_keep_paste(void);  // spclipboard.m: the edit menu's Pa
 static void sp_keyboard_rotation(BOOL starting);  // spkeyboard.m: the iPhone's zoom comes off for a turn
 static void sp_overlay_install(UIView *host);  // sptouchoverlay.m: the touch controls over the game
 static void sp_overlay_tick(void);  // sptouchoverlay.m: shown or hidden, from the event pump
+static BOOL sp_overlay_drop_click(void);  // sptouchoverlay.m: UI Mode, where a drag's drop clicks too
 
 // UIKit points in the scene window <-> AppKit points in the client's window. A point in the strip beside
 // the game converts to one outside the window (x < 0 or past its width), as on a Mac.
@@ -1194,6 +1195,14 @@ static double sp_chord_window(void) {
     [self sp_remove:touches];
     [self sp_buttons:[self sp_mask:event touches:touches] at:p];
 #if !TARGET_OS_VISION
+    // The touch controls' UI Mode: a one-finger drag that ends also clicks where it ended. Forever's action bars
+    // are a controller's: their buttons take a held spell or item on a click, and have no drop handler, so a
+    // drag from the spellbook that lets go over a slot leaves the spell on the cursor until the next click. A
+    // mouse makes that click without thinking; a finger can't see the cursor to know it's needed.
+    if (!_touches.count && _press && _press_moved && _press_fingers == 1 && sp_overlay_drop_click()) {
+        sp_mouse_button(0, YES, p);
+        sp_mouse_button(0, NO, p);
+    }
     [self sp_press_ended:touches];
 #endif
 }

@@ -42,6 +42,7 @@
 #if TARGET_OS_VISION
 static void sp_overlay_install(UIView *host) {}
 static void sp_overlay_tick(void) {}
+static BOOL sp_overlay_drop_click(void) { return NO; }
 #else
 
 // Its own lines, "[sp:AppKit] touch controls: …", like sptouchpad.m's. Never a key's letter: only what
@@ -612,6 +613,12 @@ static void sp_overlay_install(UIView *host) {
     sp_overlay.layer.zPosition = 1800;
     [host addSubview:sp_overlay];
     sp_overlay_say(sp_ov_enabled() ? @"installed" : @"installed, turned off");
+}
+
+// spevent.m's finger drags: in UI Mode, a drag's end clicks where it ended too, so a spell dragged from the
+// spellbook onto one of Forever's controller-style bar slots is placed (they take it on a click, not a drop).
+static BOOL sp_overlay_drop_click(void) {
+    return sp_overlay && !sp_overlay.hidden && sp_ov_ui_mode;
 }
 
 // The client's event pump, every call: cheap reads, and UIKit work only when something changed.
