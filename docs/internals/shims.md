@@ -182,6 +182,21 @@ and scroll events and `NSTextInputClient`), with no event taps. `spevent.m`:
   mouselook. No button goes down until the window closes (a press can't be taken back), so a left click
   waits out the window. The press is at the leftmost finger, or the rightmost with Settings > Touch.
   With Accessibility Zoom on, iOS holds three-finger touches about half a second before the app gets them.
+- **Touch controls (iPhone and iPad).** `sptouchoverlay.m`: a view over the game (zPosition 1800, under the
+  cursor) that SPInputView installs and the event pump shows or hides. It sends what a Mac keyboard and
+  mouse would, through the same queue and `sp_mouse_button`/`sp_mouse_moved_to` the other inputs use. A
+  floating thumbstick in the lower left holds W, A, S, and D (Q and E for the sides with
+  `sp_touch_stick_strafe`), eight directions with a margin at each sector's edge (`sptouchstick.h`, tested
+  by `sptouchstick_test.c`). On the right half a touch presses nothing until it's known: past 10 pt it's a
+  right-button drag (mouselook; `sp_touch_look_speed` scales it), a lift is a left click where it began, and
+  0.45 s still is a right click. Buttons: Jump (Space, held), Target (Tab), Menu (Escape), Keyboard
+  (`sp_keyboard_menu`), and a toggle that gives the right half back to the chords. Touches outside the zones
+  and buttons fall through to SPInputView. The stick, Jump, and Target type, so they show only while the
+  SPKeyboard addon's strip says the game is in play with no box focused (never on the login screen). The
+  overlay hides before the first frame, under launcher screens, with the on-screen keyboard up or a gamepad
+  connected, and with `sp_touch_controls_off` (or `SP_TOUCH_CONTROLS=0`); hiding, and the scene going
+  inactive, let go of every key and button it holds. Points need no scaling: the client's window is in
+  UIKit's points, and the client applies its backing scale itself.
 - **Touch edit menu (iPhone and iPad).** Two fingers held still for half a second open iOS's edit menu
   (`UIEditMenuInteraction`) as they lift, with Copy, Paste, and Keyboard; the chord's right press is
   unchanged. Copy presses Cmd+C. Paste is the system's own, so it reads the clipboard with no "Allow
