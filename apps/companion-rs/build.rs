@@ -8,6 +8,8 @@ use std::{env, path::PathBuf};
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     println!("cargo:rerun-if-env-changed=SP_KIT_SHA256");
+    println!("cargo:rerun-if-env-changed=SP_KIT_REPO");
+    println!("cargo:rerun-if-env-changed=SP_RELEASE_TAG");
 
     // The icon Explorer shows for both programs (icons/make-icons.sh makes it from art/icon.svg), and the
     // name and version its Properties show.
