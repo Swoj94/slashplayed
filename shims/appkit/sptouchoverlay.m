@@ -17,8 +17,9 @@
 //   A quick tap is a left click where it landed (target, press a button); a still hold is a right click
 //   (talk, loot, attack), since a touch screen has no other way to right-click with one thumb.
 // - **Buttons** (the right edge): Jump (Space, held as long as the finger is, so swimming up works),
-//   Target (Tab), Menu (Escape), Keyboard (the on-screen keyboard, spkeyboard.m), and a toggle that hands the
-//   right half back to plain touches (spevent.m's chords) for dragging spells and items.
+//   Target (Tab), Menu (Escape), Keyboard (the on-screen keyboard, spkeyboard.m), and UI Mode, which hands the
+//   whole screen back to plain touches (spevent.m's chords) for dragging spells and items: the stick goes too,
+//   since the spellbook, bags, and talent and character panels open over its corner of the screen.
 //
 // Coordinates: the client's window is in points, the same points UIKit's touches have; the client scales
 // them to its drawable by its own backing scale (spwindow.m, Settings > Display), so a touch converts with
@@ -158,6 +159,7 @@ static void sp_ov_release_keys(void) {
 @property (nonatomic) BOOL inGameOnly;             // shown only when the stick is (it types)
 @property (nonatomic) BOOL lit;                    // a toggle's on state
 - (instancetype)initWithTitle:(NSString *)title symbol:(NSString *)symbol;
+- (void)sp_set_title:(NSString *)title symbol:(NSString *)symbol;
 - (void)sp_cancel;
 @end
 
@@ -201,14 +203,23 @@ static void sp_ov_release_keys(void) {
     _icon.frame = CGRectInset(b, b.size.width * 0.27, b.size.width * 0.27);
 }
 
+// A toggle's look for its state: the icon says what the button is now, not what a tap would do.
+- (void)sp_set_title:(NSString *)title symbol:(NSString *)symbol {
+    self.accessibilityLabel = title;
+    _icon.image = [UIImage systemImageNamed:symbol];
+    _label.text = title;
+}
+
 - (void)setLit:(BOOL)lit {
     _lit = lit;
     [self sp_style:_touch != nil];
 }
 
 - (void)sp_style:(BOOL)pressed {
-    CGFloat fill = pressed ? 0.42 : _lit ? 0.26 : 0.14;
-    self.backgroundColor = [UIColor colorWithWhite:pressed ? 1 : 0.1 alpha:fill];
+    // Lit (a toggle that's on) is blue, not just brighter: it has to read at a glance in the middle of play.
+    self.backgroundColor = pressed ? [UIColor colorWithWhite:1 alpha:0.42]
+                         : _lit ? [UIColor.systemBlueColor colorWithAlphaComponent:0.6]
+                                : [UIColor colorWithWhite:0.1 alpha:0.14];
     self.layer.borderColor = [UIColor colorWithWhite:1 alpha:_lit || pressed ? 0.7 : 0.35].CGColor;
 }
 
@@ -256,7 +267,7 @@ typedef enum { SP_LOOK_NONE, SP_LOOK_PENDING, SP_LOOK_DRAG, SP_LOOK_DONE } sp_lo
 @end
 
 static SPTouchOverlay *sp_overlay;
-static BOOL sp_ov_look_on = YES;  // the camera has the right half; off, plain touches have it (the toggle)
+static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everywhere (the toggle)
 
 @implementation SPTouchOverlay {
     BOOL _shown, _stick_shown;
@@ -315,17 +326,20 @@ static BOOL sp_ov_look_on = YES;  // the camera has the right half; off, plain t
         CGRect g = sp_game_rect();
         sp_keyboard_menu(CGPointMake(CGRectGetMidX(g), g.origin.y + g.size.height * 0.45));
     };
-    _mode = [[SPTouchButton alloc] initWithTitle:@"Camera" symbol:@"arrow.triangle.2.circlepath.camera"];
-    _mode.lit = sp_ov_look_on;
+    _mode = [[SPTouchButton alloc] initWithTitle:@"UI Mode" symbol:@"hand.tap"];
     __weak SPTouchOverlay *weak = self;
     _mode.action = ^{
         SPTouchOverlay *me = weak;
         if (!me) return;
-        sp_ov_look_on = !sp_ov_look_on;
-        me->_mode.lit = sp_ov_look_on;
-        if (!sp_ov_look_on) [me sp_end_look];
-        sp_overlay_say(sp_ov_look_on ? @"the right half turns the camera" : @"the right half is plain touches");
+        sp_ov_ui_mode = !sp_ov_ui_mode;
+        if (sp_ov_ui_mode) {
+            [me sp_end_look];
+            if (me->_stick_touch) [me sp_stick_ended];
+        }
+        [me sp_mode_changed];
+        sp_overlay_say(sp_ov_ui_mode ? @"UI Mode: plain touches everywhere" : @"stick and camera back");
     };
+    [self sp_mode_changed];
     for (SPTouchButton *b in @[_jump, _target, _menu, _keyboard, _mode]) [self addSubview:b];
 
     // The scene going inactive: let go of everything, so nothing's held while the client is away (it keeps
@@ -377,14 +391,14 @@ static BOOL sp_ov_look_on = YES;  // the camera has the right half; off, plain t
 // ---- zones
 
 - (BOOL)sp_in_stick_zone:(CGPoint)p {
-    if (!_stick_shown) return NO;
+    if (!_stick_shown || sp_ov_ui_mode) return NO;
     CGRect g = sp_game_rect();
     return CGRectContainsPoint(CGRectMake(g.origin.x, g.origin.y + g.size.height * sp_ov_stick_top,
                                           g.size.width * sp_ov_stick_right, g.size.height * (1 - sp_ov_stick_top)), p);
 }
 
 - (BOOL)sp_in_look_zone:(CGPoint)p {
-    if (!sp_ov_look_on) return NO;
+    if (sp_ov_ui_mode) return NO;
     CGRect g = sp_game_rect();
     return CGRectContainsPoint(CGRectMake(g.origin.x + g.size.width * sp_ov_look_left, g.origin.y,
                                           g.size.width * (1 - sp_ov_look_left), g.size.height), p);
@@ -569,8 +583,17 @@ static BOOL sp_ov_look_on = YES;  // the camera has the right half; off, plain t
     _shown = show;
     _stick_shown = stick;
     self.hidden = !show;
-    _ring.hidden = _knob.hidden = !stick;
+    _ring.hidden = _knob.hidden = !stick || sp_ov_ui_mode;
     _jump.hidden = _target.hidden = !stick;
+}
+
+// UI Mode's button lit, with a pointing hand, while it's on (the stick hidden, so it's plain that the screen
+// is in another mode); off, the camera icon of what the right half does.
+- (void)sp_mode_changed {
+    _mode.lit = sp_ov_ui_mode;
+    [_mode sp_set_title:sp_ov_ui_mode ? @"UI Mode" : @"Camera"
+                 symbol:sp_ov_ui_mode ? @"hand.tap.fill" : @"arrow.triangle.2.circlepath.camera"];
+    _ring.hidden = _knob.hidden = !_stick_shown || sp_ov_ui_mode;
 }
 
 - (BOOL)sp_needs_layout {
