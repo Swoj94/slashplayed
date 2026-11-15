@@ -94,6 +94,8 @@ static int sp_logged_events;
 static void sp_touchpad_poll(void);  // sptouchpad.m: touchpad swipes as F16-F19
 static void sp_clipboard_keep_paste(void);  // spclipboard.m: the edit menu's Paste, read with no prompt
 static void sp_keyboard_rotation(BOOL starting);  // spkeyboard.m: the iPhone's zoom comes off for a turn
+static void sp_overlay_install(UIView *host);  // sptouchoverlay.m: the touch controls over the game
+static void sp_overlay_tick(void);  // sptouchoverlay.m: shown or hidden, from the event pump
 
 // UIKit points in the scene window <-> AppKit points in the client's window. A point in the strip beside
 // the game converts to one outside the window (x < 0 or past its width), as on a Mac.
@@ -827,6 +829,8 @@ static double sp_chord_window(void) {
     sp_cursor_view.hidden = YES;
     sp_cursor_view.layer.zPosition = 2000;
     [self addSubview:sp_cursor_view];
+    // The touch controls (iPhone and iPad; nothing on visionOS): over the game, under the cursor.
+    sp_overlay_install(self);
     if (!getenv("SP_CURSOR_SYSTEM")) [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:self]];
 #if !TARGET_OS_VISION
     _edit_menu = [[UIEditMenuInteraction alloc] initWithDelegate:self];
@@ -1580,6 +1584,7 @@ static void sp_quit_drill(NSApplication *app) {
     sp_window_track_scene();
     sp_key_repeats();
     sp_touchpad_poll();
+    sp_overlay_tick();
     for (NSUInteger i = 0; i < sp_events.count; i++) {
         SPEvent *e = sp_events[i];
         if (!(mask & (1ull << e->type))) continue;
