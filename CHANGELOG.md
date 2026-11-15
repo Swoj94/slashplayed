@@ -6,6 +6,15 @@ All notable changes to Slashplayed are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Touch controls on iPhone and iPad, so the game plays without a keyboard or mouse: a thumbstick in the
+  lower left moves you (W, A, S, and D), and dragging on the right half turns the camera. Tap to click,
+  and hold still for a moment to right-click (talk, loot, attack). Buttons on the right edge jump,
+  target the nearest enemy, open the game menu, bring up the keyboard, and hand the right half back to
+  plain touches for dragging spells and items. The stick shows only in game with no text box focused,
+  and the controls hide while a game controller is connected.
+
 ## [1.6.1] - 2026-11-14
 
 ### Fixed
