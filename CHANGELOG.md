@@ -11,9 +11,16 @@ All notable changes to Slashplayed are documented here. The format is based on
 - Touch controls on iPhone and iPad, so the game plays without a keyboard or mouse: a thumbstick in the
   lower left moves you (W, A, S, and D), and dragging on the right half turns the camera. Tap to click,
   and hold still for a moment to right-click (talk, loot, attack). Buttons on the right edge jump,
-  target the nearest enemy, open the game menu, bring up the keyboard, and hand the right half back to
-  plain touches for dragging spells and items. The stick shows only in game with no text box focused,
+  target the nearest enemy, open the game menu, bring up the keyboard, and switch to UI Mode, which
+  hands the whole screen back to plain touches for dragging spells and items. The stick shows only in game with no text box focused,
   and the controls hide while a game controller is connected.
+- Auto-run and Interact buttons in the touch controls: Interact talks to, loots, or gathers from
+  whatever is nearest in front of you, with no aiming.
+- Automatic UI Mode: the touch controls switch to UI Mode by themselves while your bags, spellbook, map,
+  or another of the game's windows is open, and back when you close it.
+- Battery Saver, on by default on iPhone and iPad: the game is capped at 30 frames per second, and 20
+  while the device is hot, so it runs cooler for longer. Settings > Touch Controls turns it, the touch
+  controls, and automatic UI Mode on or off.
 
 ## [1.6.1] - 2026-11-14
 
