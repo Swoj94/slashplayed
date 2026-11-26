@@ -1,7 +1,8 @@
 // Reads mockwow.lua's output on stdin, decodes the strip frames with the shim's decoder and checks
 // the last message's rects against the expected ones. Exit 0 if it decodes and matches. argv[1]: the
 // frames' kind, W (SPHover's, the default) or K (SPKeyboard's); a frame of another kind fails. argv[2]:
-// how many messages there must be, if given.
+// how many messages there must be, if given. argv[3] (K only): each message's windows byte in order, as
+// digits (SPKeyboard.lua's: it follows the focus part, as shims/appkit/sphover.m reads it).
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,7 @@ int main(int argc, char **argv) {
     sph_reset(&a);
     static sph_rect got[SPH_MAX_RECTS];
     int got_n = -1, frames = 0, valid = 0, messages = 0;
+    char windows[64] = "";
     char line[SPH_BLOCKS + 8];
     while (fgets(line, sizeof line, stdin)) {
         uint8_t rgb[SPH_BLOCKS], frame[SPH_FRAME_BYTES];
@@ -33,6 +35,7 @@ int main(int argc, char **argv) {
         int n;
         if (sph_feed(&a, frame, got, &n) == SPH_MESSAGE) {
             got_n = n;
+            if (kind == 'K' && messages < 63) windows[messages] = '0' + a.data[n ? 2 + 6 + 1 : 2];
             messages++;
             printf("message after %d frames: %d rects in %d chunks\n", frames, n, a.count);
         }
@@ -56,6 +59,10 @@ int main(int argc, char **argv) {
     if (bad) return 1;
     if (argc > 2 && messages != atoi(argv[2])) {
         printf("FAIL: %d messages, expected %s\n", messages, argv[2]);
+        return 1;
+    }
+    if (argc > 3 && strcmp(windows, argv[3]) != 0) {
+        printf("FAIL: windows bytes %s, expected %s\n", windows, argv[3]);
         return 1;
     }
     printf("ok: %d rects match\n", want_n);

@@ -5,7 +5,9 @@
 -- With a third argument, focus, it runs SPKeyboard.lua instead: no box has focus for the first half of
 -- the frames, then the mock UI's edit box does (SetFocus), and the rect expected is that box's; two frames
 -- before the end its SetFocus is called again, as choosing Say with chat open does, which has to send a
--- new message with the same rect.
+-- new message with the same rect. With windows instead of focus, SPKeyboard.lua again, with no box
+-- focused: a bag (ContainerFrame1) opens on frame 4 and closes on frame 8, each a message with the same
+-- (empty) focus and its windows byte. Frames are 0.1 s apart then, as the addon asks ten times a second.
 
 local SCREEN_W, SCREEN_H = 1366, 768  -- UIParent units at effective scale 1 (16:9, 768 tall)
 
@@ -115,6 +117,11 @@ for i = 1, 60 do  -- enough rects for several chunks
 end
 
 local focusMode = arg[3] == "focus"
+local windowsMode = arg[3] == "windows"
+if windowsMode then
+    ContainerFrame1 = newFrame("Frame", UIParent, { 900, 100, 200, 300 }, { shown = false })
+    expected = {}
+end
 if focusMode then
     -- A box scaled down, so its rect has to come out times its effective scale.
     editBox.scale = 0.5
@@ -137,7 +144,11 @@ for frame = 1, tonumber(arg[2]) do
         focus = editBox
         editBox:SetFocus()
     end
-    strip.scripts.OnUpdate(strip, 1 / 60)
+    if windowsMode then
+        if frame == 4 then ContainerFrame1.shown = true end
+        if frame == 8 then ContainerFrame1.shown = false end
+    end
+    strip.scripts.OnUpdate(strip, windowsMode and 0.1 or 1 / 60)
     local line = {}
     for i, t in ipairs(strip.textures) do
         line[i] = tostring(math.floor(t.color[1] * 4 + t.color[2] * 2 + t.color[3]))
