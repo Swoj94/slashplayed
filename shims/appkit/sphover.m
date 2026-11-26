@@ -21,6 +21,13 @@ __asm__(".linker_option \"-framework\", \"Metal\"");
 
 static CALayer *sp_hover_metal_layer;
 static sph_assembler sp_hover_asm, sp_hover_focus_asm;
+#if !TARGET_OS_VISION
+// The last 'K' message's focus part (see sp_hover_frame), so a change in its windows byte alone isn't a
+// new focus; 0 for none since the strip went.
+static uint8_t sp_hover_focus_last[9];
+static int sp_hover_focus_len;
+static void sp_overlay_panels(BOOL open);  // sptouchoverlay.m
+#endif
 static int sp_hover_misses = 1000;  // frames since a valid strip
 static BOOL sp_hover_cropped, sp_hover_testing;
 
@@ -96,7 +103,9 @@ static void sp_hover_frame(const uint8_t *rows, CGFloat height) {
             sph_reset(&sp_hover_focus_asm);
             if (!sp_hover_testing) sp_hover_set_rects(NULL, 0);
 #if !TARGET_OS_VISION
+            sp_hover_focus_len = 0;
             sp_keyboard_focus(NO, CGRectNull);
+            sp_overlay_panels(NO);
 #endif
             sp_hover_crop(NO, height);
             sp_stub_log("hover: strip gone");
@@ -110,8 +119,18 @@ static void sp_hover_frame(const uint8_t *rows, CGFloat height) {
     int n;
 #if !TARGET_OS_VISION
     if (kind == 'K') {
-        if (sph_feed(&sp_hover_focus_asm, frame, rects, &n) == SPH_MESSAGE)
-            sp_keyboard_focus(YES, n ? CGRectMake(rects[0].x, rects[0].y, rects[0].w, rects[0].h) : CGRectNull);
+        if (sph_feed(&sp_hover_focus_asm, frame, rects, &n) != SPH_MESSAGE) return;
+        // After the focus part (the count, the rect, and with a rect the focus calls' byte) comes the
+        // windows byte (SPKeyboard.lua's): bit 0, one of the game's windows is open. An older addon's
+        // message ends sooner, and the padding after it reads as 0. A message that changed only there
+        // isn't a new focus: passing it on would bring back a keyboard closed with Done.
+        int focus_len = n ? 2 + 6 + 1 : 2;
+        const uint8_t *d = sp_hover_focus_asm.data;
+        sp_overlay_panels(d[focus_len] & 1);
+        if (sp_hover_focus_len == focus_len && !memcmp(sp_hover_focus_last, d, (size_t)focus_len)) return;
+        sp_hover_focus_len = focus_len;
+        memcpy(sp_hover_focus_last, d, (size_t)focus_len);
+        sp_keyboard_focus(YES, n ? CGRectMake(rects[0].x, rects[0].y, rects[0].w, rects[0].h) : CGRectNull);
         return;
     }
 #endif

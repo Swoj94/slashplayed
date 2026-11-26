@@ -17,9 +17,18 @@
 //   A quick tap is a left click where it landed (target, press a button); a still hold is a right click
 //   (talk, loot, attack), since a touch screen has no other way to right-click with one thumb.
 // - **Buttons** (the right edge): Jump (Space, held as long as the finger is, so swimming up works),
-//   Target (Tab), Menu (Escape), Keyboard (the on-screen keyboard, spkeyboard.m), and UI Mode, which hands the
-//   whole screen back to plain touches (spevent.m's chords) for dragging spells and items: the stick goes too,
-//   since the spellbook, bags, and talent and character panels open over its corner of the screen.
+//   Target (Tab), Auto-run and Interact (F17 and F18, which the SPKeyboard addon binds to the game's Toggle
+//   Autorun and Interact With Target for as long as it runs: override bindings, never saved), Menu (Escape),
+//   Keyboard (the on-screen keyboard, spkeyboard.m), and UI Mode, which hands the whole screen back to plain
+//   touches (spevent.m's chords) for dragging spells and items: the stick goes too, since the spellbook, bags,
+//   and talent and character panels open over its corner of the screen.
+// - **Automatic UI Mode**: the SPKeyboard addon's strip also says whether one of the game's windows is open
+//   (bags, spellbook, character, map, a vendor's...; sphover.m reads it), and while one is, UI Mode is on by
+//   itself, then off again when the last closes. The button still overrides it either way until then.
+//   NSUserDefaults "sp_touch_auto_ui_off" turns it off.
+// - **Battery Saver's heat watch**: the launcher caps the game at 30 fps (launcher.m's battery_saver); while
+//   the device reports a serious thermal state this sends F19, which the addon binds to a 20 fps cap, and F16
+//   (back to 30) once it cools. NSUserDefaults "sp_battery_saver_off" turns both off.
 //
 // Coordinates: the client's window is in points, the same points UIKit's touches have; the client scales
 // them to its drawable by its own backing scale (spwindow.m, Settings > Display), so a touch converts with
@@ -43,6 +52,7 @@
 static void sp_overlay_install(UIView *host) {}
 static void sp_overlay_tick(void) {}
 static BOOL sp_overlay_drop_click(void) { return NO; }
+static void sp_overlay_panels(BOOL open) {}
 #else
 
 // Its own lines, "[sp:AppKit] touch controls: …", like sptouchpad.m's. Never a key's letter: only what
@@ -87,6 +97,19 @@ static BOOL sp_ov_enabled(void) {
 
 enum { SP_KEY_A = 0x00, SP_KEY_S = 0x01, SP_KEY_D = 0x02, SP_KEY_Q = 0x0C, SP_KEY_W = 0x0D,
        SP_KEY_E = 0x0E, SP_KEY_TAB = 0x30, SP_KEY_SPACE = 0x31, SP_KEY_ESCAPE = 0x35 };
+
+// Keys no game binds by default and no Mac laptop has, for the addon's override bindings (SPKeyboard.lua
+// has the same list): F16 (back to Battery Saver's 30 fps), F17 (Toggle Autorun), F18 (Interact With
+// Target), F19 (the heat watch's 20 fps). Without the addon they do nothing.
+enum { SP_KEY_F16 = 0x6A, SP_KEY_F17 = 0x40, SP_KEY_F18 = 0x4F, SP_KEY_F19 = 0x50 };
+
+static BOOL sp_ov_auto_ui_on(void) {
+    return ![NSUserDefaults.standardUserDefaults boolForKey:@"sp_touch_auto_ui_off"];
+}
+
+static BOOL sp_ov_battery_saver_on(void) {
+    return ![NSUserDefaults.standardUserDefaults boolForKey:@"sp_battery_saver_off"];
+}
 
 static NSString *sp_ov_chars(unsigned short mac) {
     unichar fc = sp_function_char(mac);  // Tab, Escape
@@ -150,6 +173,12 @@ static void sp_ov_key(unsigned short mac, BOOL down) {
 static void sp_ov_release_keys(void) {
     for (unsigned short mac = 0; mac < 128; mac++)
         if (sp_ov_held[mac]) sp_ov_key(mac, NO);
+}
+
+// A key pressed and let go: its up comes sp_ov_min_key later (sp_ov_key).
+static void sp_ov_tap(unsigned short mac) {
+    sp_ov_key(mac, YES);
+    sp_ov_key(mac, NO);
 }
 
 // ---- a button
@@ -268,7 +297,16 @@ typedef enum { SP_LOOK_NONE, SP_LOOK_PENDING, SP_LOOK_DRAG, SP_LOOK_DONE } sp_lo
 @end
 
 static SPTouchOverlay *sp_overlay;
-static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everywhere (the toggle)
+static BOOL sp_ov_ui_mode;     // UI Mode turned on with the button
+static BOOL sp_ov_panels;      // the addon says one of the game's windows is open (sp_overlay_panels)
+static BOOL sp_ov_panels_kept; // the button turned UI Mode off while one was: off until the last closes
+static BOOL sp_ov_autorun;     // Auto-run's light: toggled by its button, off once the stick goes forward or back
+static BOOL sp_ov_hot;         // the heat watch sent F19 (20 fps), not F16 since
+
+// UI Mode in effect: no stick or camera, plain touches everywhere.
+static BOOL sp_ov_ui_active(void) {
+    return sp_ov_ui_mode || (sp_ov_panels && !sp_ov_panels_kept && sp_ov_auto_ui_on());
+}
 
 @implementation SPTouchOverlay {
     BOOL _shown, _stick_shown;
@@ -286,7 +324,7 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     CGPoint _look_mouse;              // AppKit: where the camera drag has taken the mouse
     unsigned _look_gen;               // bumped per touch, so a stale hold timer does nothing
 
-    SPTouchButton *_jump, *_target, *_menu, *_keyboard, *_mode;
+    SPTouchButton *_jump, *_target, *_run, *_interact, *_menu, *_keyboard, *_mode;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -306,12 +344,24 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     _knob.backgroundColor = [UIColor colorWithWhite:1 alpha:0.5];
     [self addSubview:_knob];
 
+    __weak SPTouchOverlay *weak = self;
     _jump = [[SPTouchButton alloc] initWithTitle:@"Jump" symbol:@"arrow.up"];
     _jump.key = SP_KEY_SPACE;
     _jump.inGameOnly = YES;
     _target = [[SPTouchButton alloc] initWithTitle:@"Target" symbol:@"scope"];
     _target.key = SP_KEY_TAB;
     _target.inGameOnly = YES;
+    // Taps, not holds: each key's binding acts on its down, and a lift outside the button still counted.
+    _run = [[SPTouchButton alloc] initWithTitle:@"Auto-run" symbol:@"figure.run"];
+    _run.inGameOnly = YES;
+    _run.action = ^{
+        sp_ov_tap(SP_KEY_F17);
+        sp_ov_autorun = !sp_ov_autorun;
+        [weak sp_run_changed];
+    };
+    _interact = [[SPTouchButton alloc] initWithTitle:@"Interact" symbol:@"hand.raised"];
+    _interact.inGameOnly = YES;
+    _interact.action = ^{ sp_ov_tap(SP_KEY_F18); };
     _menu = [[SPTouchButton alloc] initWithTitle:@"Menu" symbol:@"line.3.horizontal"];
     _menu.key = SP_KEY_ESCAPE;
     _keyboard = [[SPTouchButton alloc] initWithTitle:@"Keyboard" symbol:@"keyboard"];
@@ -328,20 +378,22 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
         sp_keyboard_menu(CGPointMake(CGRectGetMidX(g), g.origin.y + g.size.height * 0.45));
     };
     _mode = [[SPTouchButton alloc] initWithTitle:@"UI Mode" symbol:@"hand.tap"];
-    __weak SPTouchOverlay *weak = self;
+    // On: UI Mode. Off: off, and kept off while a window that turned it on is still open.
     _mode.action = ^{
         SPTouchOverlay *me = weak;
         if (!me) return;
-        sp_ov_ui_mode = !sp_ov_ui_mode;
-        if (sp_ov_ui_mode) {
-            [me sp_end_look];
-            if (me->_stick_touch) [me sp_stick_ended];
+        if (sp_ov_ui_active()) {
+            sp_ov_ui_mode = NO;
+            if (sp_ov_panels) sp_ov_panels_kept = YES;
+        } else {
+            sp_ov_ui_mode = YES;
         }
         [me sp_mode_changed];
-        sp_overlay_say(sp_ov_ui_mode ? @"UI Mode: plain touches everywhere" : @"stick and camera back");
+        sp_overlay_say(sp_ov_ui_active() ? @"UI Mode: plain touches everywhere" : @"stick and camera back");
     };
     [self sp_mode_changed];
-    for (SPTouchButton *b in @[_jump, _target, _menu, _keyboard, _mode]) [self addSubview:b];
+    [self sp_run_changed];
+    for (SPTouchButton *b in @[_jump, _target, _run, _interact, _menu, _keyboard, _mode]) [self addSubview:b];
 
     // The scene going inactive: let go of everything, so nothing's held while the client is away (it keeps
     // running ~26 s in the background, spuikit.m) or when it comes back.
@@ -371,6 +423,9 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     CGFloat right = CGRectGetMaxX(g) - inset, bottom = CGRectGetMaxY(g) - inset;
     _jump.frame = CGRectMake(right - big, bottom - big, big, big);
     _target.frame = CGRectMake(right - big - gap - mid, bottom - mid, mid, mid);
+    // Interact above Target, Auto-run to its left: the thumb's reach from the camera half.
+    _interact.frame = CGRectMake(right - big - gap - mid, bottom - mid * 2 - gap, mid, mid);
+    _run.frame = CGRectMake(right - big - gap * 2 - mid * 2, bottom - mid, mid, mid);
     CGFloat x = right - small, y = bottom - big - gap * 2;
     for (SPTouchButton *b in @[_mode, _keyboard, _menu]) {
         y -= small;
@@ -392,14 +447,14 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
 // ---- zones
 
 - (BOOL)sp_in_stick_zone:(CGPoint)p {
-    if (!_stick_shown || sp_ov_ui_mode) return NO;
+    if (!_stick_shown || sp_ov_ui_active()) return NO;
     CGRect g = sp_game_rect();
     return CGRectContainsPoint(CGRectMake(g.origin.x, g.origin.y + g.size.height * sp_ov_stick_top,
                                           g.size.width * sp_ov_stick_right, g.size.height * (1 - sp_ov_stick_top)), p);
 }
 
 - (BOOL)sp_in_look_zone:(CGPoint)p {
-    if (sp_ov_ui_mode) return NO;
+    if (sp_ov_ui_active()) return NO;
     CGRect g = sp_game_rect();
     return CGRectContainsPoint(CGRectMake(g.origin.x + g.size.width * sp_ov_look_left, g.origin.y,
                                           g.size.width * (1 - sp_ov_look_left), g.size.height), p);
@@ -487,6 +542,11 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     if (!d.right) sp_ov_key(right, NO);
     if (d.up) sp_ov_key(SP_KEY_W, YES);
     if (d.down) sp_ov_key(SP_KEY_S, YES);
+    // The game stops auto-running when forward or back is pressed; the light follows.
+    if ((d.up || d.down) && sp_ov_autorun) {
+        sp_ov_autorun = NO;
+        [self sp_run_changed];
+    }
     if (d.left) sp_ov_key(left, YES);
     if (d.right) sp_ov_key(right, YES);
     _dirs = d;
@@ -565,7 +625,7 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     for (unsigned short mac = 0; mac < 128 && !held; mac++) held = sp_ov_held[mac];
     if (_stick_touch) [self sp_stick_ended];
     [self sp_end_look];
-    for (SPTouchButton *b in @[_jump, _target, _menu, _keyboard, _mode]) [b sp_cancel];
+    for (SPTouchButton *b in @[_jump, _target, _run, _interact, _menu, _keyboard, _mode]) [b sp_cancel];
     sp_ov_release_keys();
     if (held) sp_overlay_say([NSString stringWithFormat:@"let go of everything held (%s)", why]);
 }
@@ -575,8 +635,7 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     if (show == _shown && stick == _stick_shown) return;
     if (!stick && _stick_shown) {
         if (_stick_touch) [self sp_stick_ended];
-        [_jump sp_cancel];
-        [_target sp_cancel];
+        for (SPTouchButton *b in @[_jump, _target, _run, _interact]) [b sp_cancel];
     }
     if (!show && _shown) [self sp_reset:"hidden"];
     sp_overlay_say([NSString stringWithFormat:@"%s%s", show ? "shown" : "hidden",
@@ -584,17 +643,26 @@ static BOOL sp_ov_ui_mode;  // UI Mode: no stick or camera, plain touches everyw
     _shown = show;
     _stick_shown = stick;
     self.hidden = !show;
-    _ring.hidden = _knob.hidden = !stick || sp_ov_ui_mode;
-    _jump.hidden = _target.hidden = !stick;
+    _ring.hidden = _knob.hidden = !stick || sp_ov_ui_active();
+    _jump.hidden = _target.hidden = _run.hidden = _interact.hidden = !stick;
 }
 
 // UI Mode's button lit, with a pointing hand, while it's on (the stick hidden, so it's plain that the screen
 // is in another mode); off, the camera icon of what the right half does.
 - (void)sp_mode_changed {
-    _mode.lit = sp_ov_ui_mode;
-    [_mode sp_set_title:sp_ov_ui_mode ? @"UI Mode" : @"Camera"
-                 symbol:sp_ov_ui_mode ? @"hand.tap.fill" : @"arrow.triangle.2.circlepath.camera"];
-    _ring.hidden = _knob.hidden = !_stick_shown || sp_ov_ui_mode;
+    BOOL ui = sp_ov_ui_active();
+    if (ui) {  // the stick and camera stop where they are, whatever turned it on
+        [self sp_end_look];
+        if (_stick_touch) [self sp_stick_ended];
+    }
+    _mode.lit = ui;
+    [_mode sp_set_title:ui ? @"UI Mode" : @"Camera"
+                 symbol:ui ? @"hand.tap.fill" : @"arrow.triangle.2.circlepath.camera"];
+    _ring.hidden = _knob.hidden = !_stick_shown || ui;
+}
+
+- (void)sp_run_changed {
+    _run.lit = sp_ov_autorun;
 }
 
 - (BOOL)sp_needs_layout {
@@ -618,7 +686,31 @@ static void sp_overlay_install(UIView *host) {
 // spevent.m's finger drags: in UI Mode, a drag's end clicks where it ended too, so a spell dragged from the
 // spellbook onto one of Forever's controller-style bar slots is placed (they take it on a click, not a drop).
 static BOOL sp_overlay_drop_click(void) {
-    return sp_overlay && !sp_overlay.hidden && sp_ov_ui_mode;
+    return sp_overlay && !sp_overlay.hidden && sp_ov_ui_active();
+}
+
+// sphover.m: the SPKeyboard addon's strip says whether one of the game's windows is open (and NO when its
+// strip goes, out of the game). Logged when it changes, never which window.
+static void sp_overlay_panels(BOOL open) {
+    if (open == sp_ov_panels) return;
+    BOOL was = sp_ov_ui_active();
+    sp_ov_panels = open;
+    if (!open) sp_ov_panels_kept = NO;
+    if (!sp_overlay || sp_ov_ui_active() == was) return;
+    [sp_overlay sp_mode_changed];
+    sp_overlay_say(open ? @"a game window opened: UI Mode on by itself" : @"the game's windows closed: stick and camera back");
+}
+
+// Battery Saver's heat watch, from the tick while the stick shows (in game, no box focused: the keys go to
+// the game's bindings). Serious or critical: F19, the addon's 20 fps; fair or nominal again: F16, its 30.
+// Sent once per change; the thermal state is a cheap read.
+static void sp_overlay_heat(void) {
+    if (!sp_ov_battery_saver_on()) return;
+    BOOL hot = NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious;
+    if (hot == sp_ov_hot) return;
+    sp_ov_hot = hot;
+    sp_ov_tap(hot ? SP_KEY_F19 : SP_KEY_F16);
+    sp_overlay_say(hot ? @"the device is hot: Battery Saver caps the game at 20 fps" : @"the device cooled: back to 30 fps");
 }
 
 // The client's event pump, every call: cheap reads, and UIKit work only when something changed.
@@ -630,6 +722,7 @@ static void sp_overlay_tick(void) {
     BOOL stick = sp_kb_focus_known && CGRectIsNull(sp_kb_focus);
     [sp_overlay sp_show:show stick:stick];
     if (show && [sp_overlay sp_needs_layout]) [sp_overlay setNeedsLayout];
+    if (stick) sp_overlay_heat();
 }
 
 #endif
