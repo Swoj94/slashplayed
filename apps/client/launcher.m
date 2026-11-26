@@ -254,6 +254,83 @@ static void default_render_scale(NSString *flavor) {
     [@"" writeToFile:mark atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
+// Battery Saver (Settings > Touch Controls; NSUserDefaults "sp_battery_saver_off" turns it off), on an iPhone
+// and iPad by default: the game capped at 30 fps in its Config.wtf before every launch, useMaxFPS and maxFPS.
+// Heat is what ends a session on a phone (docs/troubleshooting.md, Heat), and 30 halves an uncapped
+// 60 or 120's GPU work. The values it replaces are kept in Library/spsaver-<flavor>.plist (an empty string
+// for a line that wasn't there) the first time, and put back when it's turned off, so the player's own cap
+// returns. While it's on, a cap changed in the game's settings lasts until the next launch. Its heat
+// watch, 20 fps while the device is hot, is the touch controls' (sptouchoverlay.m) and the SPKeyboard addon's.
+static NSString *config_value(NSString *text, NSString *name) {
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        NSString *prefix = [NSString stringWithFormat:@"SET %@ \"", name];
+        if (![line.lowercaseString hasPrefix:prefix.lowercaseString]) continue;
+        NSString *rest = [line substringFromIndex:prefix.length];
+        NSRange q = [rest rangeOfString:@"\""];
+        return q.location == NSNotFound ? rest : [rest substringToIndex:q.location];
+    }
+    return nil;
+}
+
+// `text` with name's line set to value, or removed for nil; added at the end when there was none.
+static NSString *config_with(NSString *text, NSString *name, NSString *value) {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    NSString *prefix = [NSString stringWithFormat:@"SET %@ ", name].lowercaseString;
+    BOOL done = NO;
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (![line.lowercaseString hasPrefix:prefix]) {
+            [lines addObject:line];
+        } else if (value && !done) {
+            [lines addObject:[NSString stringWithFormat:@"SET %@ \"%@\"", name, value]];
+            done = YES;
+        }
+    }
+    while (lines.count && ![lines.lastObject length]) [lines removeLastObject];
+    if (value && !done) [lines addObject:[NSString stringWithFormat:@"SET %@ \"%@\"", name, value]];
+    return [[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"];
+}
+
+static void battery_saver(NSString *flavor) {
+    if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPhone &&
+        UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return;
+    BOOL on = ![NSUserDefaults.standardUserDefaults boolForKey:@"sp_battery_saver_off"];
+    NSString *home = NSHomeDirectory();
+    NSString *record = [home stringByAppendingPathComponent:[NSString stringWithFormat:@"Library/spsaver-%@.plist", flavor]];
+    NSDictionary<NSString *, NSString *> *kept = [NSDictionary dictionaryWithContentsOfFile:record];
+    if (!on && !kept) return;
+    NSString *wtf = [home stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/_%@_/WTF", flavor]];
+    NSString *config = [wtf stringByAppendingPathComponent:@"Config.wtf"];
+    NSString *text = [NSString stringWithContentsOfFile:config encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    NSArray<NSString *> *names = @[@"useMaxFPS", @"maxFPS"];
+    NSString *changed = text;
+    if (on) {
+        if (!kept) {
+            NSMutableDictionary *was = [NSMutableDictionary dictionary];
+            for (NSString *name in names) was[name] = config_value(text, name) ?: @"";
+            if (![was writeToFile:record atomically:YES]) {
+                say(@"battery saver: couldn't keep the game's own frame rate cap; not capping it");
+                return;
+            }
+        }
+        changed = config_with(config_with(text, @"useMaxFPS", @"1"), @"maxFPS", @"30");
+    } else {
+        for (NSString *name in names) changed = config_with(changed, name, [kept[name] length] ? kept[name] : nil);
+    }
+    if (![changed isEqual:text]) {
+        [NSFileManager.defaultManager createDirectoryAtPath:wtf withIntermediateDirectories:YES attributes:nil error:nil];
+        if (![changed writeToFile:config atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+            say(@"battery saver: couldn't write Config.wtf");
+            return;
+        }
+    }
+    if (on) {
+        say(@"battery saver: the game is capped at 30 fps");
+    } else {
+        [NSFileManager.defaultManager removeItemAtPath:record error:nil];
+        say(@"battery saver: off; the game's own frame rate cap is back");
+    }
+}
+
 // The intro movie is marked as seen on a game's first launch on the device (no playIntroMovie in its
 // Config.wtf yet), always. A game's first session on an empty store does the client's own setup of its
 // data first, and the intro it starts then never plays: the client never asks the CDN for the movie's
@@ -759,6 +836,7 @@ int main(int argc, char **argv) {
     region_sync(flavor, choice);
     game_region(flavor, choice);
     default_render_scale(flavor);
+    battery_saver(flavor);
     skip_intro(flavor);
     flavor_info(flavor);
     // The addons the app carries, into the game's folder before the client loads (sp_addons_place): SPMovie

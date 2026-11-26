@@ -43,6 +43,19 @@ private func setChordRightFinger(_ right: Bool) {
     say("touch: click with " + (right ? "right" : "left") + " finger")
 }
 
+// Touch Controls' switches, read by the AppKit shim (sptouchoverlay.m, which has the same literals) and the
+// launcher (launcher.m's battery_saver): each key is stored only when its switch is off, so they're on by
+// default and a reset of the defaults turns them back on.
+private let touchControlsOffKey = "sp_touch_controls_off"
+private let autoUIOffKey = "sp_touch_auto_ui_off"
+private let batterySaverOffKey = "sp_battery_saver_off"
+
+private func setSwitch(_ offKey: String, on: Bool, _ name: String) {
+    if on { UserDefaults.standard.removeObject(forKey: offKey) }
+    else { UserDefaults.standard.set(true, forKey: offKey) }
+    say("touch controls: \(name) " + (on ? "on" : "off"))
+}
+
 // The license files in the app's licenses/ (apps/client/build.sh, the companion's ClientAssembly), by name,
 // in this order; one this doesn't know comes last, under its file name.
 struct License: Hashable {
@@ -93,6 +106,7 @@ struct Snapshot {
     var signedUntil: Date?  // when the app stops opening, unless it's renewed (sp_profile_expiry)
     var scale = 0
     var chordRightFinger = false
+    var touchControls = true, autoUI = true, batterySaver = true
     var games: [Game] = []
     var version = "Unknown"
 }
@@ -134,6 +148,9 @@ final class Settings: ObservableObject {
         let scale = UserDefaults.standard.integer(forKey: scaleKey)
         s.scale = scale == 1 || scale == 2 ? scale : 0
         s.chordRightFinger = UserDefaults.standard.bool(forKey: chordRightFingerKey)
+        s.touchControls = !UserDefaults.standard.bool(forKey: touchControlsOffKey)
+        s.autoUI = !UserDefaults.standard.bool(forKey: autoUIOffKey)
+        s.batterySaver = !UserDefaults.standard.bool(forKey: batterySaverOffKey)
         s.games = flavors.map { flavor in
             var source: NSString?
             let version = sp_game_build(flavor, &source)?["Version"]
@@ -339,6 +356,7 @@ struct SettingsView: View {
                     display
                     #if !os(visionOS)
                     touch
+                    touchControls
                     #endif
                     ForEach(settings.now.games, id: \.flavor) { game($0) }
                     about
@@ -479,6 +497,23 @@ struct SettingsView: View {
             Text("Touch")
         } footer: {
             Text("Press with two fingers together to right-click, or three to middle-click. The click is where the left or right finger is. Hold two fingers still for a moment, then lift them, for Copy, Paste, and Keyboard. With Accessibility Zoom on, three-finger presses lag.")
+        }
+    }
+
+    // The on-screen controls (the AppKit shim's sptouchoverlay.m) and Battery Saver (launcher.m).
+    private var touchControls: some View {
+        Section {
+            Toggle("Touch Controls", isOn: Binding(get: { settings.now.touchControls },
+                                                   set: { setSwitch(touchControlsOffKey, on: $0, "shown"); settings.reload() }))
+                .id("touch-controls")
+            Toggle("Automatic UI Mode", isOn: Binding(get: { settings.now.autoUI },
+                                                      set: { setSwitch(autoUIOffKey, on: $0, "automatic UI Mode"); settings.reload() }))
+            Toggle("Battery Saver", isOn: Binding(get: { settings.now.batterySaver },
+                                                  set: { setSwitch(batterySaverOffKey, on: $0, "battery saver"); settings.reload() }))
+        } header: {
+            Text("Touch Controls")
+        } footer: {
+            Text("A thumbstick, a camera drag, and buttons over the game. Automatic UI Mode turns UI Mode on while the bags, spellbook, map, or another window is open. Battery Saver caps the game at 30 frames per second, and 20 while the device is hot; turn it off to use the game's own setting. Changes to Battery Saver apply from the game's next start.")
         }
     }
     #endif
