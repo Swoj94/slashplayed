@@ -15,6 +15,12 @@ on:
         description: The release the kit is attached to, which the tool downloads it from.
         type: string
         required: true
+      upstream_tag:
+        description: A fork's touch-controls build only (touch-test-build.yml) - a paulstraw/slashplayed release
+          to merge into the checkout first (scripts/fork-merge-upstream.sh), as the kit was built from.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -71,6 +77,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.upstream_tag != '' && '0' || '1' }}
+
+      - name: Merge the Slashplayed release the kit was built from
+        if: inputs.upstream_tag != ''
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: sh scripts/fork-merge-upstream.sh "$UPSTREAM_TAG"
 
       - name: Install rustup
         env:

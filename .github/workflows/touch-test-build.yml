@@ -1,14 +1,21 @@
-# A test build of this branch for a fork, started by hand: Actions > Touch controls test build > Run workflow.
-# For trying the touch controls (shims/appkit/sptouchoverlay.m) on a device with no Mac: it builds the device
-# kit unsigned on macOS (as release.sh does, without Developer ID or notarization: the host tool signs it with
-# the player's Apple ID), slashplayed-companion against it (companion-rs-build.yml, which points the tool at
-# this repository's release for the kit, SP_KIT_REPO), and publishes both as a prerelease of this repository,
-# tagged touch-<version>-test.<run number>, which never matches release.yml's v*. No secrets, no environment:
-# nothing here signs or notarizes anything. The Windows .exe is unsigned, so SmartScreen warns about it.
+# A build of a fork's touch controls (shims/appkit/sptouchoverlay.m) for a device with no Mac, on the latest
+# Slashplayed release: the check merges paulstraw/slashplayed's newest v* release into the checkout, in the
+# runner only (scripts/fork-merge-upstream.sh), so a new Slashplayed (a game patch it supports, its fixes)
+# reaches the fork with no merge to do by hand. Every day the check asks whether that release, or this
+# branch, is newer than the last build's, and builds only then; Actions > Touch controls test build > Run
+# workflow builds now regardless. It builds the device kit unsigned on macOS (as release.sh does, without
+# Developer ID or notarization: the host tool signs it with the player's Apple ID), slashplayed-companion
+# against it (companion-rs-build.yml, which points the tool at this repository's release for the kit,
+# SP_KIT_REPO), and publishes both as a prerelease of this repository, tagged touch-<version>-test.<run
+# number>, which never matches release.yml's v*; its notes carry a build-key line the check compares. No
+# secrets, no environment: nothing here signs or notarizes anything. The Windows .exe is unsigned, so
+# SmartScreen warns about it. A merge that conflicts fails the run, which GitHub emails about.
 name: Touch controls test build
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '23 20 * * *'  # daily, 04:23 in Perth
 
 permissions: {}
 
@@ -35,7 +42,38 @@ env:
     work/spapple/xros
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      upstream: ${{ steps.check.outputs.upstream }}
+      key: ${{ steps.check.outputs.key }}
+    steps:
+      - name: Find the latest Slashplayed release and the last build
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          upstream="$(gh release view -R paulstraw/slashplayed --json tagName -q .tagName)"
+          case "$upstream" in v[0-9]*) ;; *) echo "::error::no Slashplayed release found"; exit 1 ;; esac
+          key="$SHA+$upstream"
+          build=true
+          if [ "$EVENT" = schedule ] && gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" -q '.[].body' \
+               | grep -qF "build-key: $key"; then
+            build=false
+          fi
+          echo "Slashplayed $upstream, this branch at $SHA: build=$build"
+          { echo "build=$build"; echo "upstream=$upstream"; echo "key=$key"; } >> "$GITHUB_OUTPUT"
+
   kit:
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: xcode-27
     timeout-minutes: 90
     permissions:
@@ -49,6 +87,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Merge the latest Slashplayed release
+        env:
+          UPSTREAM_TAG: ${{ needs.check.outputs.upstream }}
+        run: sh scripts/fork-merge-upstream.sh "$UPSTREAM_TAG"
 
       - name: Name the test build
         id: meta
@@ -56,7 +100,7 @@ jobs:
           set -euo pipefail
           version="$(awk -F'"' '/^ *MARKETING_VERSION:/ {print $2; exit}' apps/companion/project.yml)"
           {
-            echo "sha=$(git rev-parse HEAD)"
+            echo "sha=$GITHUB_SHA"  # the branch's commit, not the runner-only merge: the release targets it
             echo "version=$version"
             echo "tag=touch-$version-test.$GITHUB_RUN_NUMBER"
           } >> "$GITHUB_OUTPUT"
@@ -86,16 +130,17 @@ jobs:
           retention-days: 7
 
   companion-rs-build:
-    needs: kit
+    needs: [check, kit]
     permissions:
       contents: read
     uses: ./.github/workflows/companion-rs-build.yml
     with:
       kit_sha256: ${{ needs.kit.outputs.kit_sha256 }}
       release_tag: ${{ needs.kit.outputs.tag }}
+      upstream_tag: ${{ needs.check.outputs.upstream }}
 
   publish:
-    needs: [kit, companion-rs-build]
+    needs: [check, kit, companion-rs-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -113,19 +158,24 @@ jobs:
           SHA: ${{ needs.kit.outputs.sha }}
           VERSION: ${{ needs.kit.outputs.version }}
           REF: ${{ github.ref_name }}
+          UPSTREAM: ${{ needs.check.outputs.upstream }}
+          KEY: ${{ needs.check.outputs.key }}
         run: |
           set -euo pipefail
           (cd assets && sha256sum -- *) > SHA256SUMS
           cat SHA256SUMS
           cat > notes.md <<EOF
-          A test build of the touch controls, built from \`$REF\` ($SHA): Slashplayed $VERSION with a thumbstick,
-          camera drag, taps, and Jump, Target, Menu, and Keyboard buttons on iPhone and iPad.
+          The touch controls on Slashplayed $UPSTREAM, built from \`$REF\` ($SHA): a thumbstick, camera drag,
+          taps, and Jump, Target, Auto-run, Interact, Menu, Keyboard, and UI Mode buttons on iPhone and iPad, with
+          automatic UI Mode and Battery Saver (Settings > Touch Controls).
 
           - **Windows:** download \`slashplayed-companion-windows-x86_64.zip\`, unzip it, and run
             Slashplayed Companion.exe. It's unsigned, so SmartScreen warns about it (More info > Run anyway). It
             downloads this release's device kit itself. It needs Apple's device driver: Apple Devices from the
             Microsoft Store, or iTunes.
           - Unofficial and experimental: not a Slashplayed release.
+
+          <!-- build-key: $KEY -->
           EOF
           sed -i 's/^          //' notes.md
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --prerelease --target "$SHA" \
