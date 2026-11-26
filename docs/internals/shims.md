@@ -190,13 +190,26 @@ and scroll events and `NSTextInputClient`), with no event taps. `spevent.m`:
   by `sptouchstick_test.c`). On the right half a touch presses nothing until it's known: past 10 pt it's a
   right-button drag (mouselook; `sp_touch_look_speed` scales it), a lift is a left click where it began, and
   0.45 s still is a right click. Buttons: Jump (Space, held), Target (Tab), Menu (Escape), Keyboard
-  (`sp_keyboard_menu`), and a toggle that gives the right half back to the chords. Touches outside the zones
+  (`sp_keyboard_menu`), and UI Mode, which turns off the stick and the camera zone so every touch goes to the
+  chords (the spellbook and bags open over the stick's corner). Touches outside the zones
   and buttons fall through to SPInputView. The stick, Jump, and Target type, so they show only while the
   SPKeyboard addon's strip says the game is in play with no box focused (never on the login screen). The
   overlay hides before the first frame, under launcher screens, with the on-screen keyboard up or a gamepad
   connected, and with `sp_touch_controls_off` (or `SP_TOUCH_CONTROLS=0`); hiding, and the scene going
   inactive, let go of every key and button it holds. Points need no scaling: the client's window is in
   UIKit's points, and the client applies its backing scale itself.
+  Auto-run and Interact tap F17 and F18, which the SPKeyboard addon binds (override bindings, never saved)
+  to Toggle Autorun and Interact With Target, with `SoftTargetInteract` raised to 3 so Interact reaches the
+  nearest NPC, corpse, or object; Auto-run's light goes off when the stick presses W or S, as the game's
+  autorun does. Automatic UI Mode (`sp_touch_auto_ui_off` turns it off): the addon's 'K' message ends with a
+  windows byte (bit 0: a bag, a UI panel, or one of a list of named windows is visible, asked ten times a
+  second); `sphover.m` passes it to `sp_overlay_panels` and passes the focus part on only when that changed,
+  so a window opening doesn't bring back a keyboard closed with Done. While a window is open UI Mode is on;
+  the button turns it off until the last one closes. Battery Saver (`sp_battery_saver_off` turns it off):
+  the launcher's `battery_saver` sets `useMaxFPS` 1 and `maxFPS` 30 in Config.wtf before every start,
+  keeping the values it replaced in `Library/spsaver-<flavor>.plist` and putting them back when it's off;
+  while the stick shows, a thermal state of serious or worse taps F19 (the addon's 20 fps cap) and a cooler
+  one F16 (30 again).
 - **Touch edit menu (iPhone and iPad).** Two fingers held still for half a second open iOS's edit menu
   (`UIEditMenuInteraction`) as they lift, with Copy, Paste, and Keyboard; the chord's right press is
   unchanged. Copy presses Cmd+C. Paste is the system's own, so it reads the clipboard with no "Allow
