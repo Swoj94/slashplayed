@@ -11,6 +11,15 @@
 -- Only in game: addons don't run on the login and character screens, where the edit menu's Keyboard
 -- brings the keyboard up instead (shims/appkit/spkeyboard.m). Nothing about the box's text goes out:
 -- only where the box is, which doesn't change as it's typed in.
+--
+-- For the touch controls (shims/appkit/sptouchoverlay.m) it does two more things:
+-- - The message ends with a windows byte: bit 0 set while one of the game's windows is open (bags,
+--   spellbook, character, map, a vendor's...), which turns the controls' UI Mode on by itself. Which window
+--   it is never goes out.
+-- - Override bindings (for as long as the addon runs, never saved with the player's own) for keys no game
+--   binds by default and the controls send: F17 Toggle Autorun, F18 Interact With Target (with the game's
+--   soft interact target on, so it reaches the nearest NPC, corpse, or object without aiming), and F19 and
+--   F16, Battery Saver's heat watch: a 20 fps cap while the device is hot, then 30 again.
 
 local N_BLOCKS = 320
 local FRAME_BYTES = 120  -- N_BLOCKS * 3 / 8
@@ -66,7 +75,7 @@ end
 
 -- The message: no rects, or the focused box's, in screen fractions (origin bottom left). A forbidden or
 -- hidden box (a secure frame's) can't be measured, so it's reported as none.
-local function scan()
+local function scanFocus()
     local f = GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus()
     if not f or (f.IsForbidden and f:IsForbidden()) or not f:IsVisible() then return string.char(0, 0) end
     local l, b, w, h = f:GetRect()
@@ -82,6 +91,108 @@ local function scan()
     return string.char(0, 1, floor(x / 16), x % 16 * 16 + floor(y / 256), y % 256,
                        floor(qw / 16), qw % 16 * 16 + floor(qh / 256), qh % 256, focusCalls)
 end
+
+-- ---- the game's windows (for the touch controls' automatic UI Mode)
+
+-- The windows a player drags in or taps around in: the UI's panels (whatever the game puts in its left,
+-- centre, and right slots, GetUIPanel), the bags, and the ones that aren't panels in every client. Names a
+-- client doesn't have are skipped.
+local WINDOWS = {
+    "ContainerFrameCombinedBags", "CharacterFrame", "SpellBookFrame", "PlayerSpellsFrame",
+    "ProfessionsBookFrame", "PlayerTalentFrame", "ClassTalentFrame", "TalentFrame", "WorldMapFrame",
+    "QuestLogFrame", "MerchantFrame", "BankFrame", "MailFrame", "TradeFrame", "AuctionHouseFrame",
+    "AuctionFrame", "GameMenuFrame", "SettingsPanel", "InterfaceOptionsFrame", "CollectionsJournal",
+    "EncounterJournal", "PVEFrame", "FriendsFrame", "CommunitiesFrame", "MacroFrame", "TradeSkillFrame",
+    "ProfessionsFrame", "ClassTrainerFrame", "LootFrame", "GossipFrame", "QuestFrame", "TabardFrame",
+}
+local PANEL_SLOTS = { "left", "center", "right", "doublewide", "fullscreen" }
+
+local function shown(f)
+    return type(f) == "table" and f.IsVisible and f:IsVisible()
+end
+
+local function windowOpen()
+    for i = 1, 13 do
+        if shown(_G["ContainerFrame" .. i]) then return true end
+    end
+    for _, name in ipairs(WINDOWS) do
+        if shown(_G[name]) then return true end
+    end
+    if GetUIPanel then
+        for _, slot in ipairs(PANEL_SLOTS) do
+            if shown(GetUIPanel(slot)) then return true end
+        end
+    end
+    return false
+end
+
+-- Asked ten times a second, not every frame: thirty-odd lookups, and the controls don't need it sooner.
+local windows, windowsAt = false, -1
+local function windowsByte(now)
+    if now - windowsAt >= 0.1 then
+        windowsAt = now
+        local ok, open = pcall(windowOpen)
+        windows = ok and open or false
+    end
+    return windows and 1 or 0
+end
+
+local elapsed = 0
+local function scan()
+    return scanFocus() .. string.char(windowsByte(elapsed))
+end
+
+-- ---- the touch controls' keys
+
+local MAX_FPS, HOT_FPS = 30, 20
+
+local function setCVar(name, value)
+    if not (GetCVar and SetCVar) or GetCVar(name) == nil then return end
+    if tostring(GetCVar(name)) ~= tostring(value) then SetCVar(name, value) end
+end
+
+local function capFPS(fps)
+    setCVar("useMaxFPS", 1)
+    setCVar("maxFPS", fps)
+end
+
+-- A button for a CLICK binding: it acts on the key's down (and on a client that sends only the up).
+local function clickButton(name, fn)
+    local b = CreateFrame("Button", name, UIParent)
+    if b.RegisterForClicks then b:RegisterForClicks("AnyDown", "AnyUp") end
+    b:SetScript("OnClick", function(_, _, down)
+        if down ~= false then fn() end
+    end)
+    return b
+end
+clickButton("SPKeyboardCool", function() capFPS(MAX_FPS) end)
+clickButton("SPKeyboardHot", function() capFPS(HOT_FPS) end)
+
+local BINDINGS = {
+    F16 = "CLICK SPKeyboardCool:LeftButton",
+    F17 = "TOGGLEAUTORUN",
+    F18 = "INTERACTTARGET",
+    F19 = "CLICK SPKeyboardHot:LeftButton",
+}
+
+local keys = CreateFrame("Frame", "SPKeyboardKeys")
+local bound = false
+local function bind()
+    if bound or not SetOverrideBinding then return end
+    if InCombatLockdown and InCombatLockdown() then return end  -- again once combat ends
+    for key, command in pairs(BINDINGS) do SetOverrideBinding(keys, false, key, command) end
+    -- The Interact key reaches the soft interact target (the nearest NPC, corpse, or object in front),
+    -- which the game shows only with a controller unless this is 2 (keyboard) or 3 (both).
+    local soft = GetCVar and tonumber(GetCVar("SoftTargetInteract") or "")
+    if soft and soft < 2 then setCVar("SoftTargetInteract", 3) end
+    bound = true
+end
+if keys.RegisterEvent then
+    keys:RegisterEvent("PLAYER_LOGIN")
+    keys:RegisterEvent("PLAYER_REGEN_ENABLED")
+    keys:SetScript("OnEvent", function() pcall(bind) end)
+end
+if IsLoggedIn and IsLoggedIn() then pcall(bind) end
 
 -- ---- sending (as SPHover.lua's)
 
@@ -127,7 +238,8 @@ end
 
 -- Every frame: asking for the focus is cheap, and the keyboard should follow it at once. The strip
 -- changes only when the message does.
-strip:SetScript("OnUpdate", function()
+strip:SetScript("OnUpdate", function(_, dt)
+    elapsed = elapsed + (dt or 0)
     layout()
     local ok, msg = pcall(scan)
     if ok and msg ~= message then
